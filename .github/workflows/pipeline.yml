@@ -4,26 +4,34 @@
 name: Java CI with Maven
 
 on:
-  push:
-    # branches: [ master ]
-  pull_request:
-    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional Maven test selector (e.g. -Dtest=JSONObjectTest)"
+        required: false
+        default: ""
 
 jobs:
   # old-school build and jar method. No tests run or compiled.
-  build-1_6: 
+  build-1_6:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
-        # build for java 1.6, however don't run any tests
-        java: [ 1.6 ]
+        # build for java 6, however don't run any tests
+        java: [ 6 ]
     name: Java ${{ matrix.java }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+      # setup-java's zulu resolver no longer lists Java 6; fetch the Zulu 6 JDK from Azul's CDN
+      - name: Download Zulu JDK 6
+        run: curl -fsSL -o "$RUNNER_TEMP/zulu6.tar.gz" https://cdn.azul.com/zulu/bin/zulu6.22.0.3-jdk6.0.119-linux_x64.tar.gz
       - name: Setup java
-        uses: actions/setup-java@v1
+        uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java }}
+          distribution: "jdkfile"
+          jdkFile: ${{ runner.temp }}/zulu6.tar.gz
       - name: Compile Java ${{ matrix.java }}
         run: |
           mkdir -p target/classes
@@ -32,29 +40,31 @@ jobs:
         run: |
           jar cvf target/org.json.jar -C target/classes .
       - name: Upload Java ${{ matrix.java }} JAR
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Java ${{ matrix.java }} JAR
           path: target/org.json.jar
       
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     strategy:
       matrix:
         # build against supported Java LTS versions:
         java: [ 8, 11 ]
     name: Java ${{ matrix.java }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Setup java
-        uses: actions/setup-java@v1
+        uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java }}
+          distribution: "zulu"
       - name: Compile Java ${{ matrix.java }}
         run: mvn clean compile -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }} -Dmaven.test.skip=true -Dmaven.site.skip=true -Dmaven.javadoc.skip=true
       - name: Run Tests ${{ matrix.java }}
         run: |
-          mvn test -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }}
+          mvn test -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }} ${{ inputs.test-filter }}
       - name: Build Test Report ${{ matrix.java }}
         if: ${{ always() }}
         run: |
@@ -62,13 +72,24 @@ jobs:
           mvn site -DgenerateReports=false -Dmaven.compiler.source=${{ matrix.java }} -Dmaven.compiler.target=${{ matrix.java }}
       - name: Upload Test Results ${{ matrix.java }}
         if: ${{ always() }}
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Test Results ${{ matrix.java }}
           path: target/surefire-reports/
       - name: Upload Test Report ${{ matrix.java }}
         if: ${{ always() }}
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4
         with:
           name: Test Report ${{ matrix.java }}
           path: target/site/
+      # Release jar: published json-<version>.jar is a JDK 8 build with Java 6 bytecode (pom source/target 1.6)
+      - name: Package release JAR
+        if: ${{ matrix.java == 8 }}
+        run: mvn -B clean package -Dmaven.compiler.source=1.6 -Dmaven.compiler.target=1.6 -Dmaven.test.skip=true -Dmaven.javadoc.skip=true -Dgpg.skip=true
+      - name: Upload release JAR
+        if: ${{ matrix.java == 8 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-jar
+          path: target/json-*[0-9].jar
+          if-no-files-found: error
