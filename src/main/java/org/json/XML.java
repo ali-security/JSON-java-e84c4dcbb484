@@ -56,6 +56,12 @@ public class XML {
     public static final String TYPE_ATTR = "xsi:type";
 
     /**
+     * The max number of chars for any number. Exceeding this limit will cause
+     * the value to be converted to a string.
+     */
+    private static final int MAX_NUMBER_LENGTH = 1000;
+
+    /**
      * Creates an iterator for navigating Code Points in a string instead of
      * characters. Once Java7 support is dropped, this can be replaced with
      * <code>
@@ -460,7 +466,8 @@ public class XML {
      * This method is the same as {@link JSONObject#stringToValue(String)}.
      *
      * @param string String to convert
-     * @return JSON value of this string or the string
+     * @return JSON value of this string or the string. If the string represents
+     *         a number that is too large, a string will be returned.
      */
     // To maintain compatibility with the Android API, this method is a direct copy of
     // the one in JSONObject. Changes made here should be reflected there.
@@ -489,7 +496,9 @@ public class XML {
         char initial = string.charAt(0);
         if ((initial >= '0' && initial <= '9') || initial == '-') {
             try {
-                return stringToNumber(string);
+                if (string.length() <= MAX_NUMBER_LENGTH) {
+                    return stringToNumber(string);
+                }
             } catch (Exception ignore) {
             }
         }

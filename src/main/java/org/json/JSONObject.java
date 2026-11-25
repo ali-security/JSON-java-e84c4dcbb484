@@ -141,6 +141,13 @@ public class JSONObject {
     static final Pattern NUMBER_PATTERN = Pattern.compile("-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?");
 
     /**
+     * The max number of chars for any number. Exceeding this limit will cause
+     * the value to be converted to a string. It also bounds the number of
+     * decimal digits of a BigInteger produced from a BigDecimal value.
+     */
+    private static final int MAX_NUMBER_LENGTH = 1000;
+
+    /**
      * The map where the JSONObject's properties are kept.
      */
     private final Map<String, Object> map;
@@ -1227,7 +1234,7 @@ public class JSONObject {
             return (BigInteger) val;
         }
         if (val instanceof BigDecimal){
-            return ((BigDecimal) val).toBigInteger();
+            return bigDecimalToBigInteger((BigDecimal) val, defaultValue);
         }
         if (val instanceof Double || val instanceof Float){
             if (!numberIsFinite((Number)val)) {
@@ -1248,12 +1255,37 @@ public class JSONObject {
             // that type cast support that may truncate the decimal.
             final String valStr = val.toString();
             if(isDecimalNotation(valStr)) {
-                return new BigDecimal(valStr).toBigInteger();
+                return bigDecimalToBigInteger(new BigDecimal(valStr), defaultValue);
             }
             return new BigInteger(valStr);
         } catch (Exception e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Converts a BigDecimal to a BigInteger, truncating any fractional part.
+     * Refuses to materialise an integer whose decimal representation would
+     * exceed {@link #MAX_NUMBER_LENGTH} digits. Prevents DoS via short exponent
+     * literals like 1e100000000 (CVE-2026-59171).
+     *
+     * @param bd value to convert
+     * @param defaultValue value to return if the integer part is too large.
+     * @return BigInteger conversion of the value, or the defaultValue if the
+     *          integer part exceeds {@link #MAX_NUMBER_LENGTH} digits.
+     */
+    private static BigInteger bigDecimalToBigInteger(BigDecimal bd, BigInteger defaultValue) {
+        // number of digits before the decimal point
+        final long integerDigits = (long) bd.precision() - bd.scale();
+        if (integerDigits > MAX_NUMBER_LENGTH) {
+            return defaultValue;
+        }
+        if (integerDigits <= 0) {
+            // |bd| < 1 truncates to zero. Short-circuit so that literals like
+            // 1e-100000000 do not compute 10^100000000 in toBigInteger().
+            return BigInteger.ZERO;
+        }
+        return bd.toBigInteger();
     }
 
     /**
@@ -2270,7 +2302,8 @@ public class JSONObject {
      *
      * @param string
      *            A String. can not be null.
-     * @return A simple JSON value.
+     * @return A simple JSON value. If the string represents a number that is
+     *         too large, a string will be returned.
      * @throws NullPointerException
      *             Thrown if the string is null.
      */
@@ -2300,7 +2333,9 @@ public class JSONObject {
         char initial = string.charAt(0);
         if ((initial >= '0' && initial <= '9') || initial == '-') {
             try {
-                return stringToNumber(string);
+                if (string.length() <= MAX_NUMBER_LENGTH) {
+                    return stringToNumber(string);
+                }
             } catch (Exception ignore) {
             }
         }
